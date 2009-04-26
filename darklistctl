@@ -1,0 +1,35 @@
+#!/usr/bin/python
+import socket
+import sys
+
+if len(sys.argv) < 2:
+	print >> sys.stderr, "Needed a command to send to darklistd"
+	sys.exit(1)
+
+if len(sys.argv) == 2:
+	sock = "/var/run/darklistd"
+	cmd = sys.argv[1]+"\n"
+elif len(sys.argv) == 3:
+	sock = sys.argv[1]
+	cmd = sys.argv[2]+"\n"
+else:
+	print >> sys.stderr, "Too many command line options"
+	sys.exit(1)
+	
+
+s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM,0)
+try:
+	s.connect(sock)
+except socket.error, e:
+	print >> sys.stderr, "Failed to open unix socket (%s - %s)" % (sock, e[1])
+	print >> sys.stderr, " - Is darklistd running ?"
+	sys.exit(1)
+	
+s.send(cmd)
+while 1:
+	f=s.recv(1024)
+	if f=="":
+		break
+	sys.stdout.write(f)
+print
+s.close()

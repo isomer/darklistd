@@ -1,0 +1,11 @@
+#!/bin/bash 
+
+grep "Expired" /var/log/darklistd.log | sed 's@\(.*\) Expired \(.*\)/\(.*\) whitelisted entries, and \(.*\)/\(.*\) grey.*@\1 \2 \3 \4 \5@g' >/tmp/grey.plot
+
+gnuplot <<EOF
+set terminal png
+set output "/home/perry/public_html/grey.png"
+set timefmt "%Y-%m-%d %H:%M:%S"
+set xdata time
+plot "/tmp/grey.plot" using 1:4 with lines title "white", "/tmp/grey.plot" using 1:6 with lines title "grey"
+EOF

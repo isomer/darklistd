@@ -1,0 +1,254 @@
+#!/usr/bin/python
+import anydbm
+import sys
+import time
+import socket
+import os
+import traceback
+import signal
+
+# Force a recheck of a "known" server
+WHITE_CHECK_INTERVAL = 30*24*60*60 # 1month
+# How long to require it to retry for before we "know" it's a valid server
+GREY_DELAY_INTERVAL = 25*60 # 25min
+# Time that they must check back within
+GREY_REPLY_INTERVAL = 24*60*60 # 1d
+# Expiry Interval
+EXPIRY_INTERVAL = 60*60 # 1h
+
+# State storage directory
+STATE_DIR = "/var/lib/darklistd"
+# Socket Location
+SOCK_LOC = "/var/run/darklistd"
+# Log File
+LOG_LOC = "/var/log/darklistd.log"
+# Pid File
+PID_FILE = "/var/run/darklistd.pid"
+
+def log(msg):
+	global logf
+	#print time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()),msg
+	print >>logf,time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()),msg
+	logf.flush()
+
+def force_sync():
+	global whitelist,greylist
+	if greylist is not None:
+		greylist.sync()
+		greylist.close()
+	if whitelist is not None:
+		whitelist.sync()
+		whitelist.close()
+	try:
+		greylist = anydbm.open(os.path.join(STATE_DIR, "greylist.db"),"w")
+	except:
+		log("Failed to open greylist: Creating new db")
+		greylist = anydbm.open(os.path.join(STATE_DIR, "greylist.db"),"c")
+	try:
+		whitelist = anydbm.open(os.path.join(STATE_DIR, "whitelist.db"),"w")
+	except:
+		log("Failed to open whitelist: Creating new db")
+		whitelist = anydbm.open(os.path.join(STATE_DIR, "whitelist.db"),"c")
+
+def do_check(sock,args):
+	global whitelist, greylist
+	if len(args) != 3:
+		sock.send("fail Wrong number of arguments")
+		log("Wrong number of arguments to check")
+		return
+	(srcip,srcemail,dstemail) = args
+
+	key=" ".join((srcip,srcemail,dstemail))
+
+	if srcip in whitelist:
+		if key in greylist:
+			log("%s: Address was already promoted to whitelist, removing from greylist" % (key))
+			del greylist[key]
+		if float(whitelist[srcip]) < time.time():
+			log("%s: Source expired from whitelist (%d sec too old)" % (srcip,time.time()-float(whitelist[srcip])))
+			del whitelist[srcip]
+		else:
+			log("%s: Source present in whitelist (%d sec remaining)" % (srcip,float(whitelist[srcip])-time.time()))
+			sock.send("false")
+			return
+
+
+	if key in greylist:
+		if float(greylist[key]) + GREY_REPLY_INTERVAL < time.time():
+			log("%s: Source expired from greylist (%d seconds overdue)" % (key,time.time()-float(greylist[key])))
+			del greylist[key]
+		elif float(greylist[key]) < time.time():
+			log("%s: Source promoted from greylist to whitelist" % (key))
+			del greylist[key]
+			whitelist[srcip]=str(time.time() + WHITE_CHECK_INTERVAL)
+			sock.send("false")
+			return
+		else:
+			# Rechecked back too quickly.
+			log("%s: Source retry too quickly (%d seconds early)" % (key,float(greylist[key])-time.time()))
+			sock.send("true")
+			return
+
+	log("%s: Adding new source host to greylist" % key)
+	greylist[key]=str(time.time() + GREY_DELAY_INTERVAL)
+	sock.send("true")
+	return
+
+def do_expire(sock,args):
+	global last_expire,whitelist,greylist
+	now=time.time()
+	white_expired=0
+	white_remain=0
+	grey_expired=0
+	grey_remain=0
+	for i in whitelist.keys():
+		if float(whitelist[i])<now:
+			del whitelist[i]
+			white_expired+=1
+		else:
+			white_remain+=1
+	for i in greylist.keys():
+		if float(greylist[i]) + GREY_REPLY_INTERVAL<now:
+			del greylist[i]
+			grey_expired+=1
+		else:
+			grey_remain+=1
+	msg=("Expired %d/%d whitelisted entries, and %d/%d greylisted entries" %
+		(white_expired,white_expired+white_remain,
+		grey_expired,grey_expired+grey_remain))
+	log(msg)
+	if sock is not None:
+		sock.send(msg)
+	last_expire = now
+
+def do_dump(sock,args):
+	now=time.time()
+	sock.send("Greylist:\n")
+	for i in greylist.keys():
+		if float(greylist[i]) + GREY_REPLY_INTERVAL < now:
+			msg="expired"
+		elif float(greylist[i]) < now: 
+			msg=("%.02fs until expiry" % (float(greylist[i])+GREY_REPLY_INTERVAL-now))
+		else:
+			msg=("%.02fs remaining" % (float(greylist[i])-now))
+		sock.send("%s -> %s\n" % (i,msg))
+	sock.send("\n")
+	sock.send("Whitelist:\n")
+	for i in whitelist.keys():
+		if float(whitelist[i]) < now:
+			sock.send("%s -> expired\n" % (i))
+		else:
+			sock.send("%s -> %.02f remaining\n" % (i,float(whitelist[i])-now))
+
+
+def createDaemon():
+   """Detach a process from the controlling terminal and run it in the
+   background as a daemon.
+   """
+
+   try:
+      pid = os.fork()
+   except OSError, e:
+      raise Exception, "%s [%d]" % (e.strerror, e.errno)
+
+   if (pid == 0):	# The first child.
+      os.setsid()
+      try:
+         pid = os.fork()	# Fork a second child.
+      except OSError, e:
+         raise Exception, "%s [%d]" % (e.strerror, e.errno)
+
+      if (pid == 0):	# The second child.
+         os.chdir("/")
+         os.umask(0)
+      else:
+         os._exit(0)	# Exit parent (the first child) of the second child.
+   else:
+      os._exit(0)	# Exit parent of the first child.
+
+
+   sys.stdin.close()
+   sys.stdin=open("/dev/null","r")
+
+   sys.stdout.close()
+   sys.stdout=open("/dev/null","w")
+
+   sys.stderr.close()
+   sys.stderr=open("/dev/null","w")
+
+def on_sighup(*args):
+	global logf
+	logf.close()
+	logf=open(LOG_LOC,"a")
+	log("Reopened log")
+
+
+try:
+	os.makedirs(STATE_DIR)
+except:
+	pass
+
+whitelist=None
+greylist=None
+logf=open(LOG_LOC,"a")
+
+try:
+	os.unlink(SOCK_LOC)
+except:
+	pass
+
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+sock.bind(SOCK_LOC)
+os.chmod(SOCK_LOC,0777)
+sock.listen(8)
+
+force_sync()
+createDaemon()
+
+signal.signal(signal.SIGHUP,on_sighup)
+pidf = open(PID_FILE,"w")
+pidf.write(str(os.getpid())+"\n")
+pidf.close()
+
+log("Starting up")
+do_expire(None,[])
+log("Ready")
+try:
+	while True:
+		try:
+			clientsock,clientaddr = sock.accept()
+		except socket.error, e:
+			# Probably an interrupted system call
+			continue
+
+		try:
+			buf=clientsock.recv(1024)
+		except socket.error, e:
+			# Probably an interrupted system call
+			clientsock.close()
+			continue
+
+		while buf!="":
+			if "\n" in buf:
+				line,buf=buf.split("\n",1)
+			else:
+				line=buf
+				buf=""
+			words=line.strip().split(" ")
+			if len(words)<1:
+				continue
+			cmd="do_" + words[0]
+			if cmd in globals():
+				globals()[cmd](clientsock,words[1:])
+			else:
+				clientsock.send("ERR Unknown command")
+				break
+		clientsock.close()
+		if time.time()-last_expire > EXPIRY_INTERVAL:
+			do_expire(None,[])
+		force_sync()
+except:
+	msg=traceback.format_exc()
+	for i in msg.split("\n"):
+		log(i)
+	raise
