@@ -239,7 +239,10 @@ try:
 				continue
 			cmd="do_" + words[0]
 			if cmd in globals():
-				globals()[cmd](clientsock,words[1:])
+				try:
+					globals()[cmd](clientsock,words[1:])
+				except socket.error:
+					log("Socket error talking to client")
 			else:
 				clientsock.send("ERR Unknown command")
 				break
