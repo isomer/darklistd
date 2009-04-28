@@ -1,0 +1,20 @@
+darklistctl allows sending commands to the darklistd daemon over the control
+socket.  
+
+protocol:
+
+* check <srcip> <srcemail> <dstemail>
+
+outputs "true" if the user should be greylisted, "false" otherwise. or "fail
+<message>" if an error occured.
+
+* expire
+forces an expiry run to remove stale entries from the database.  Returns a
+message saying how many entries were expired, and the size of the various
+lists.  Expire is run automatically by darklistd every EXPIRE_INTERVAL seconds.
+
+* dump
+Provide a debugging dump of the entire database, showing how long before
+entries expire from their respective lists.
+
+
