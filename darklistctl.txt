@@ -17,4 +17,14 @@ lists.  Expire is run automatically by darklistd every EXPIRE_INTERVAL seconds.
 Provide a debugging dump of the entire database, showing how long before
 entries expire from their respective lists.
 
+* dumpstate
+dumps the state of the database, suitable for stuff
+
+* add grey <timeoffset> <srcip> <srcemail> <dstemail>
+* add white <timeoffset> <srcip>
+negative grey times mean that it's not yet ready, positive mean that it's ready
+
+* del grey <timeoffset> <srcip> <srcemail> <dstemail>
+* del white <timeoffset> <srcip>
+
 

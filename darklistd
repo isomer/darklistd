@@ -140,7 +140,72 @@ def do_dump(sock,args):
 		else:
 			sock.send("%s -> %.02f remaining\n" % (i,float(whitelist[i])-now))
 
+def do_dumpstate(sock,args):
+	now=time.time()
+	for i in greylist:
+		if float(greylist[i]) + GREY_REPLY_INTERVAL < now:
+			continue
+		else:
+			sock.send("add grey %.02fs %s\n" % (float(greylist[i])-now,i))
+	for i in whitelist:	
+		if float(whitelist[i]) < now:
+			continue
+		else:
+			sock.send("add white %.02fs %s\n", (float(whitelist[i])-now,i))
 
+def do_add(sock,args):
+	if len(args)<3:
+		sock.send("fail not enough arguments\n")
+		return
+	colour = args[0]
+	timeout = float(args[1])+time.time()
+	key = " ".join(args[2:])
+	if colour == "grey":
+		if key in greylist:
+			# Our version isn't ready yet
+			if float(darklist[key]) < time.time():
+				# Choose the one that expires first
+				greylist[key] = str(min(float(greylist[key]),timeout))
+				sock.send("ok updated greylist\n")
+			else:
+				# Choose the one that expires last
+				greylist[key] = str(max(float(greylist[key]),timeout))
+				sock.send("ok updated greylist\n")
+		else:
+			greylist[key]=str(timeout)
+			sock.send("ok added to greylist\n")
+	elif colour == "white":
+		if key in whitelist:
+			# Choose the one that expires last
+			darklist[key] = str(max(float(darklist[key]),timeout))
+			sock.send("ok updated whitelist\n")
+		else:
+			darklist[key] = str(timeout)
+			sock.send("ok added to whitelist\n")
+	else:
+		sock.send("fail unknown colour %s\n" % colour)
+
+def do_del(sock,args):
+	if len(args)<2:
+		sock.send("fail too few arguments\n")
+		return
+	colour = args[0]
+	key = " ".join(args[1:])
+	if colour=="grey":
+		if key in greylist:
+			del greylist[key]
+			sock.send("ok removed from greylist\n")
+		else:
+			sock.send("warn not present in greylist\n")
+	elif colour=="white":
+		if key in whitelist:
+			del whitelist[key]
+			sock.send("ok removed from whitelist\n")
+		else:
+			sock.send("warn not present in whitelist\n")
+	else:
+		sock.send("fail unknown colour %s\n" % colour)
+	
 def createDaemon():
    """Detach a process from the controlling terminal and run it in the
    background as a daemon.
